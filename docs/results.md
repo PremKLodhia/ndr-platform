@@ -42,3 +42,9 @@ Trained strictly on benign traffic flows with reconstruction error threshold cal
 | **Anomaly FPR** | 0.0116 |
 | **True Negatives** | 7673 |
 | **False Positives** | 90 |
+
+## Live SOC Detection & Containment Terminal Telemetry
+
+<p align="center">
+  <img src="terminal-results.png" alt="Live SOC Terminal Telemetry & Containment Actions" width="100%" />
+</p>

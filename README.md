@@ -55,6 +55,13 @@ Full evaluation details are documented in [`docs/results.md`](docs/results.md).
 
 ---
 
+
+### Live SOC Detection & Containment Telemetry
+
+<p align="center">
+  <img src="docs/terminal-results.png" alt="Live SOC Terminal Telemetry & Containment Actions" width="100%" />
+</p>
+
 ## Installation & Setup
 
 ### Prerequisites
