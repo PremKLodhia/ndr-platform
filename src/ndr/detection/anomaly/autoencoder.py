@@ -4,12 +4,50 @@ Detects zero-day threats and anomalous communication via reconstruction error th
 """
 import os
 import logging
+import joblib
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional
+from sklearn.preprocessing import RobustScaler
 from ...features.flow_extractor import FLOW_FEATURE_COLUMNS
 
 logger = logging.getLogger(__name__)
+
+# Top-level PyTorch Module for clean serialization
+try:
+    import torch
+    import torch.nn as nn
+
+    class PyTorchAE(nn.Module):
+        def __init__(self, in_features: int):
+            super().__init__()
+            self.encoder = nn.Sequential(
+                nn.Linear(in_features, 32),
+                nn.BatchNorm1d(32),
+                nn.LeakyReLU(0.1),
+                nn.Linear(32, 16),
+                nn.BatchNorm1d(16),
+                nn.LeakyReLU(0.1),
+                nn.Linear(16, 8)
+            )
+            self.decoder = nn.Sequential(
+                nn.Linear(8, 16),
+                nn.BatchNorm1d(16),
+                nn.LeakyReLU(0.1),
+                nn.Linear(16, 32),
+                nn.BatchNorm1d(32),
+                nn.LeakyReLU(0.1),
+                nn.Linear(32, in_features)
+            )
+
+        def forward(self, x):
+            latent = self.encoder(x)
+            return self.decoder(latent)
+
+    TORCH_AVAILABLE = True
+except Exception as e:
+    TORCH_AVAILABLE = False
+    PyTorchAE = None
 
 
 class BenignFlowAutoencoder:
@@ -19,69 +57,30 @@ class BenignFlowAutoencoder:
         self.input_dim = input_dim
         self.anomaly_threshold = anomaly_threshold
         self.is_trained = False
-        self.torch_available = False
-        self._init_torch_model()
-
-    def _init_torch_model(self):
-        try:
-            import torch
-            import torch.nn as nn
-
-            class PyTorchAE(nn.Module):
-                def __init__(self, in_features: int):
-                    super().__init__()
-                    self.encoder = nn.Sequential(
-                        nn.Linear(in_features, 32),
-                        nn.BatchNorm1d(32),
-                        nn.LeakyReLU(0.1),
-                        nn.Linear(32, 16),
-                        nn.BatchNorm1d(16),
-                        nn.LeakyReLU(0.1),
-                        nn.Linear(16, 8)  # Latent representation
-                    )
-                    self.decoder = nn.Sequential(
-                        nn.Linear(8, 16),
-                        nn.BatchNorm1d(16),
-                        nn.LeakyReLU(0.1),
-                        nn.Linear(16, 32),
-                        nn.BatchNorm1d(32),
-                        nn.LeakyReLU(0.1),
-                        nn.Linear(32, in_features)
-                    )
-
-                def forward(self, x):
-                    latent = self.encoder(x)
-                    reconstructed = self.decoder(latent)
-                    return reconstructed
-
-            self.net = PyTorchAE(self.input_dim)
-            self.torch = torch
-            self.nn = nn
-            self.torch_available = True
-        except Exception as e:
-            logger.info(f"PyTorch unavailable ({e}), using PCA/statistical anomaly model fallback")
-            self.torch_available = False
-
-        from sklearn.preprocessing import RobustScaler
+        self.torch_available = TORCH_AVAILABLE
         self.scaler = RobustScaler()
         self.is_scaled = False
 
+        if self.torch_available and PyTorchAE is not None:
+            self.net = PyTorchAE(self.input_dim)
+        else:
+            self.net = None
+
     def fit(self, X: np.ndarray, epochs: int = 20, batch_size: int = 64, lr: float = 0.001) -> "BenignFlowAutoencoder":
         """Train autoencoder on benign flows only."""
-        if not self.torch_available:
+        if not self.torch_available or self.net is None:
             self.is_trained = True
             return self
 
         X_scaled = self.scaler.fit_transform(X)
         self.is_scaled = True
 
-        torch = self.torch
         tensor_x = torch.tensor(X_scaled, dtype=torch.float32)
         dataset = torch.utils.data.TensorDataset(tensor_x)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
-        criterion = self.nn.MSELoss()
+        criterion = nn.MSELoss()
 
         self.net.train()
         for epoch in range(epochs):
@@ -105,14 +104,13 @@ class BenignFlowAutoencoder:
 
     def compute_anomaly_score(self, feature_vec: np.ndarray) -> float:
         """Compute reconstruction error (MSE) for a normalized feature vector."""
-        if not self.is_trained or not self.torch_available:
+        if not self.is_trained or not self.torch_available or self.net is None:
             return 0.01
 
         vec_reshaped = feature_vec.reshape(1, -1)
         if self.is_scaled:
             vec_reshaped = self.scaler.transform(vec_reshaped)
 
-        torch = self.torch
         self.net.eval()
         with torch.no_grad():
             x = torch.tensor(vec_reshaped, dtype=torch.float32)
@@ -132,3 +130,28 @@ class BenignFlowAutoencoder:
             "mitre_id": "T1071" if is_anomaly else None,
             "mitre_tactic": "Anomalous / Unseen Channel" if is_anomaly else None
         }
+
+    def save(self, filepath: str):
+        """Serialize autoencoder state safely."""
+        state = {
+            "input_dim": self.input_dim,
+            "anomaly_threshold": self.anomaly_threshold,
+            "is_trained": self.is_trained,
+            "scaler": self.scaler,
+            "is_scaled": self.is_scaled,
+            "net_state": self.net.state_dict() if self.net is not None else None
+        }
+        joblib.dump(state, filepath)
+
+    @classmethod
+    def load(cls, filepath: str) -> "BenignFlowAutoencoder":
+        """Load autoencoder state safely."""
+        state = joblib.load(filepath)
+        ae = cls(input_dim=state["input_dim"], anomaly_threshold=state["anomaly_threshold"])
+        ae.is_trained = state["is_trained"]
+        ae.scaler = state["scaler"]
+        ae.is_scaled = state["is_scaled"]
+        if ae.net is not None and state["net_state"] is not None:
+            ae.net.load_state_dict(state["net_state"])
+            ae.net.eval()
+        return ae

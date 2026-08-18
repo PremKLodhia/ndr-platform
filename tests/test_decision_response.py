@@ -1,10 +1,11 @@
 """
-Unit tests for Decision Arbiter, OPNsense API mock client, and SIEM Dispatcher.
+Unit tests for Decision Arbiter, ContainmentManager dual-backend fail-secure fallback, and SIEM Dispatcher.
 """
 import pytest
+from unittest.mock import patch, MagicMock
 from ndr.ingest.models import UnifiedFlow, SuricataAlert
 from ndr.decision.arbiter import DecisionArbiter, ActionVerdict
-from ndr.response.opnsense_client import OPNsenseClient
+from ndr.response.opnsense_client import ContainmentManager
 from ndr.response.siem_dispatcher import SIEMDispatcher
 
 
@@ -20,7 +21,7 @@ def test_arbiter_signature_block():
         signature_id=2010001,
         signature="ET EXPLOIT Apache Struts RCE",
         category="Exploit",
-        severity=1  # Critical
+        severity=1
     )
     flow = UnifiedFlow(
         flow_id="EXPLOIT-FLOW-01",
@@ -44,16 +45,27 @@ def test_arbiter_signature_block():
     assert result.src_ip == "192.168.1.99"
 
 
-def test_opnsense_mock_containment():
-    client = OPNsenseClient(mock_mode=True)
-    res = client.block_ip("192.168.1.99", reason="Test RCE Block")
-    assert res["status"] == "success"
-    assert res["action"] == "block"
-    assert "192.168.1.99" in client.mock_blocked_ips
+def test_containment_mock_backend():
+    mgr = ContainmentManager(backend="mock")
+    log = mgr.block_ip("192.168.1.99", reason="Test RCE Block")
+    assert log.status == "SUCCESS"
+    assert log.target_ip == "192.168.1.99"
+    assert "192.168.1.99" in mgr.mock_blocked_ips
 
-    unblock_res = client.unblock_ip("192.168.1.99")
-    assert unblock_res["status"] == "success"
-    assert "192.168.1.99" not in client.mock_blocked_ips
+    unblock = mgr.unblock_ip("192.168.1.99")
+    assert unblock["status"] == "success"
+    assert "192.168.1.99" not in mgr.mock_blocked_ips
+
+
+def test_containment_fail_secure_fallback_to_iptables():
+    """Simulate OPNsense API network failure -> verify automatic fallback to local iptables."""
+    mgr = ContainmentManager(backend="opnsense", api_host="https://unreachable.firewall.local")
+    
+    with patch("requests.post", side_effect=ConnectionError("Firewall gateway unreachable")):
+        log = mgr.block_ip("10.10.10.66", reason="Critical C2 Exfiltration")
+        assert log.fallback_triggered is True
+        assert log.target_ip == "10.10.10.66"
+        assert log.backend_used == "iptables"
 
 
 def test_siem_dispatcher_event_formatting():

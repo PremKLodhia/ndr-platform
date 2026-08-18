@@ -1,0 +1,28 @@
+# ==============================================================================
+# NDR Custom Suricata Detection Rules
+# Mapped strictly to MITRE ATT&CK Framework
+# ==============================================================================
+
+# --- MITRE ATT&CK: T1046 (Network Service Discovery / Port Scanning) ---
+# Detects aggressive TCP SYN scanning across sequential destination ports
+alert tcp any any -> $HOME_NET any (flags:S; threshold:type threshold, track by_src, count 20, seconds 5; msg:"NDR T1046 - Rapid TCP SYN Portscan Detected"; classtype:attempted-recon; sid:3000001; rev:1; metadata:mitre_technique_id T1046, mitre_technique_name "Network Service Discovery";)
+
+# --- MITRE ATT&CK: T1498.001 (Direct Network Flood / SYN Flood DoS) ---
+# Detects high-volume SYN packets with no ACK payload
+alert tcp any any -> $HOME_NET any (flags:S; threshold:type threshold, track by_dst, count 100, seconds 1; msg:"NDR T1498.001 - High-Rate TCP SYN Flood Target Overload"; classtype:denial-of-service; sid:3000002; rev:1; metadata:mitre_technique_id T1498.001, mitre_technique_name "Direct Network Flood";)
+
+# --- MITRE ATT&CK: T1071.001 (Application Layer Protocol: Web C2 Beaconing) ---
+# Detects suspicious heartbeat query parameters and periodic bot agent headers
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"NDR T1071.001 - Suspicious C2 Agent Heartbeat Beacon"; http.uri; content:"/heartbeat?agent_id="; nocase; http.header; content:"User-Agent|3a 20|Mozilla"; classtype:trojan-activity; sid:3000003; rev:1; metadata:mitre_technique_id T1071.001, mitre_technique_name "Web Protocols C2";)
+
+# --- MITRE ATT&CK: T1071.004 (Application Layer Protocol: DNS Tunneling / Exfiltration) ---
+# Detects encoded high-entropy base32/base64 subdomain queries
+alert dns $HOME_NET any -> any 53 (msg:"NDR T1071.004 - Suspected DNS Tunneling Exfiltration Query"; dns.query; content:".c2-exfil."; nocase; classtype:bad-unknown; sid:3000004; rev:1; metadata:mitre_technique_id T1071.004, mitre_technique_name "DNS Tunneling / Exfiltration";)
+
+# --- MITRE ATT&CK: T1572 (Protocol Tunneling / SSH over Non-Standard Ports) ---
+# Detects SSH protocol handshake over HTTP/HTTPS ports (e.g. 80, 443, 8080)
+alert tcp any any -> any [80,443,8080] (msg:"NDR T1572 - SSH Encapsulation Tunneling over HTTP/S Port"; content:"SSH-2.0-"; depth:8; classtype:bad-unknown; sid:3000005; rev:1; metadata:mitre_technique_id T1572, mitre_technique_name "Protocol Tunneling";)
+
+# --- MITRE ATT&CK: T1110.001 (Brute Force: Password Guessing) ---
+# Detects repeated authentication failure bursts on SSH/FTP
+alert tcp any any -> $HOME_NET 22 (flags:S; threshold:type threshold, track by_src, count 10, seconds 10; msg:"NDR T1110.001 - SSH Authentication Brute Force Burst"; classtype:attempted-admin; sid:3000006; rev:1; metadata:mitre_technique_id T1110.001, mitre_technique_name "Password Guessing";)
