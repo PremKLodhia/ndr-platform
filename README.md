@@ -1,5 +1,9 @@
 # Network Detection & Response (NDR) Platform
 
+<p align="center">
+  <img src="docs/hero-banner.jpg" alt="NDR Platform Architecture & Security Engine" width="100%" />
+</p>
+
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![MITRE ATT&CK](https://img.shields.io/badge/MITRE%20ATT%26CK-Mapped-orange.svg)](docs/threat-mapping.md)
