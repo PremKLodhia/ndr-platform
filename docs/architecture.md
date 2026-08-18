@@ -19,50 +19,46 @@ This platform implements a **fail-secure, dual-path architecture**:
 
 ```mermaid
 flowchart TD
-    subgraph SENSORS ["Sensor & Ingestion Layer"]
-        TAP[SPAN / Mirror TAP Interface] --> ZEEK[Zeek Network Security Monitor]
-        TAP --> SURI[Suricata IDS Engine]
-        ZEEK -->|conn.log, dns.log, ssl.log, http.log| ZPARSER[ZeekParser TSV/JSON Engine]
-        SURI -->|eve.json alerts| SPARSER[SuricataParser Engine]
+    subgraph Ingestion ["1. Traffic Ingestion Layer"]
+        A["Raw Traffic / Replayed PCAPs"] --> B["Zeek Sensor"]
+        A --> C["Suricata Sensor"]
+        B --> D["ZeekParser (conn/dns/ssl/http)"]
+        C --> E["SuricataParser (eve.json)"]
     end
 
-    subgraph FEAT ["Feature Extraction & Preprocessing"]
-        ZPARSER --> EXT[FlowFeatureExtractor: 31+ Tabular Features]
-        EXT --> ENT[Shannon Payload Entropy]
-        EXT --> DNS[DNS Subdomain Entropy & Linguistic Features]
-        EXT --> PORT[Port Distribution Shannon Entropy]
-        EXT --> TIME[Inter-Arrival Timing & Burstiness Stats]
-        ENT & DNS & PORT & TIME --> NORM[NormalizedFlow Common Schema]
+    subgraph FeatureEng ["2. Feature Engineering"]
+        D --> F["FlowFeatureExtractor (31+ Tabular Features)"]
+        D --> G["Shannon & DNS Subdomain Entropy"]
+        D --> H["Port Distribution Entropy"]
+        D --> I["Inter-Arrival Timing Stats"]
+        F & G & H & I --> J["NormalizedFlow Common Schema"]
     end
 
-    subgraph DETECT ["Dual-Path Detection Engine"]
-        SPARSER --> SENG[Suricata Engine: ET Rules & SIDs]
-        NORM --> CLF[Supervised XGBoost Classifier
-Precision-First Threshold 0.85]
-        NORM --> AE[PyTorch Benign Autoencoder
-Reconstruction Error MSE]
-        SENG -->|Signature Match + ATT&CK SIDs| SIG_SIGNS[Detection Signals]
-        CLF -->|Multi-Class Probabilities| ML_SIGNS[Detection Signals]
-        AE -->|Reconstruction Loss vs Threshold| AE_SIGNS[Detection Signals]
+    subgraph DualPath ["3. Dual-Path Detection Engine"]
+        E --> K["Suricata Signature Engine (ET Rules)"]
+        J --> L["Supervised Flow Classifier (XGBoost)"]
+        J --> M["Benign Baseline Autoencoder (PyTorch MSE)"]
+        K -->|"Signature Matches"| N["Detection Signals"]
+        L -->|"Class Probabilities"| N
+        M -->|"Reconstruction Loss"| N
     end
 
-    subgraph DECISION ["Fail-Secure Decision Engine"]
-        SIG_SIGNS & ML_SIGNS & AE_SIGNS --> ARBITER[Decision Arbiter]
-        WATCHDOG[Watchdog Timeout Guard
-@fail_secure_guard] -.-> ARBITER
-        ARBITER --> VERDICT{Verdict Selection}
-        VERDICT -->|Critical Threat / Conf >= 0.85| BLOCK[BLOCK_AND_ISOLATE]
-        VERDICT -->|Suspicious / Unseen Channel| QUARANTINE[QUARANTINE_VLAN 99]
-        VERDICT -->|Low Risk| PASS[ALERT_ONLY / PASS]
-        VERDICT -->|Component Failure / Crash| BLOCK
+    subgraph Decision ["4. Fail-Secure Decision Engine"]
+        N --> O["Decision Arbiter"]
+        P["Timeout & Crash Watchdog"] -.->|"fail_secure_guard"| O
+        O --> Q{"Verdict Selection"}
+        Q -->|"Confidence >= 0.85 / Critical Sig"| R["BLOCK_AND_ISOLATE"]
+        Q -->|"Suspicious / Anomaly"| S["QUARANTINE_VLAN (VLAN 99)"]
+        Q -->|"Low Risk / Benign"| T["PASS"]
+        Q -->|"Any Component Failure / Timeout"| R
     end
 
-    subgraph RESPONSE ["Automated Containment & SIEM"]
-        BLOCK & QUARANTINE --> MGR[ContainmentManager]
-        MGR -->|Primary REST API| OPNSENSE[OPNsense Firewall Gateway]
-        MGR -->|Failover Fallback| IPTABLES[Local Host iptables Drop]
-        ARBITER --> ECS[SIEM Dispatcher: ECS JSON Format]
-        ECS --> WAZUH[Wazuh / ELK SOC Dashboard]
+    subgraph Response ["5. Containment & Visibility"]
+        R & S --> U["ContainmentManager"]
+        U -->|"Primary Action"| V["OPNsense Firewall REST API"]
+        U -->|"Failover Action"| W["Local Host iptables Drop"]
+        O --> X["SIEM Dispatcher (ECS JSON)"]
+        X --> Y["Wazuh / ELK Dashboard"]
     end
 ```
 

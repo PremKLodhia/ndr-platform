@@ -19,45 +19,45 @@ An end-to-end, portfolio-grade **Network Detection and Response (NDR)** platform
 ```mermaid
 flowchart TD
     subgraph Ingestion ["1. Traffic Ingestion Layer"]
-        A[Raw Traffic / Replayed PCAPs] --> B[Zeek Sensor]
-        A --> C[Suricata Sensor]
-        B --> D[ZeekParser TSV/JSON\nconn/dns/ssl/http logs]
-        C --> E[SuricataParser EVE JSON]
+        A["Raw Traffic / Replayed PCAPs"] --> B["Zeek Sensor"]
+        A --> C["Suricata Sensor"]
+        B --> D["ZeekParser (conn/dns/ssl/http)"]
+        C --> E["SuricataParser (eve.json)"]
     end
 
     subgraph FeatureEng ["2. Feature Engineering"]
-        D --> F[FlowFeatureExtractor\n31+ Tabular Features]
-        D --> G[Shannon & DNS Entropy]
-        D --> H[Port Distribution Entropy]
-        D --> I[Inter-Arrival Timing Stats]
-        F & G & H & I --> J[NormalizedFlow Common Schema]
+        D --> F["FlowFeatureExtractor (31+ Tabular Features)"]
+        D --> G["Shannon & DNS Subdomain Entropy"]
+        D --> H["Port Distribution Entropy"]
+        D --> I["Inter-Arrival Timing Stats"]
+        F & G & H & I --> J["NormalizedFlow Common Schema"]
     end
 
     subgraph DualPath ["3. Dual-Path Detection Engine"]
-        E --> K[Suricata Engine\nET Rules + Custom SIDs]
-        J --> L[Supervised Flow Classifier\nXGBoost / Precision-First Threshold 0.85]
-        J --> M[PyTorch Autoencoder\nBenign Baseline MSE Loss]
-        K -->|SID + MITRE IDs| N[Detection Signals]
-        L -->|Class Probabilities| N
-        M -->|Reconstruction Error| N
+        E --> K["Suricata Signature Engine (ET Rules)"]
+        J --> L["Supervised Flow Classifier (XGBoost)"]
+        J --> M["Benign Baseline Autoencoder (PyTorch MSE)"]
+        K -->|"Signature Matches"| N["Detection Signals"]
+        L -->|"Class Probabilities"| N
+        M -->|"Reconstruction Loss"| N
     end
 
     subgraph Decision ["4. Fail-Secure Decision Engine"]
-        N --> O[Decision Arbiter]
-        P[Component Timeout / Crash Watchdog] -.->|@fail_secure_guard| O
-        O -->|Verdict Matrix| Q{Action Verdict}
-        Q -->|Confidence >= 0.85 / Sig Match| R[BLOCK_AND_ISOLATE]
-        Q -->|Suspicious / Anomaly| S[QUARANTINE_VLAN 99]
-        Q -->|Low Risk| T[ALERT_ONLY / PASS]
-        Q -->|Any Error / Timeout| R
+        N --> O["Decision Arbiter"]
+        P["Timeout & Crash Watchdog"] -.->|"fail_secure_guard"| O
+        O --> Q{"Verdict Selection"}
+        Q -->|"Confidence >= 0.85 / Critical Sig"| R["BLOCK_AND_ISOLATE"]
+        Q -->|"Suspicious / Anomaly"| S["QUARANTINE_VLAN (VLAN 99)"]
+        Q -->|"Low Risk / Benign"| T["PASS"]
+        Q -->|"Any Component Failure / Timeout"| R
     end
 
     subgraph Response ["5. Containment & Visibility"]
-        R & S --> U[ContainmentManager]
-        U -->|Primary| V[OPNsense Firewall REST API\n/api/firewall/alias_util/add/]
-        U -->|Fallback on Failure| W[Local Host iptables Drop]
-        O --> X[SIEM Dispatcher\nECS / Wazuh JSON Logs]
-        X --> Y[Wazuh / ELK Dashboard]
+        R & S --> U["ContainmentManager"]
+        U -->|"Primary Action"| V["OPNsense Firewall REST API"]
+        U -->|"Failover Action"| W["Local Host iptables Drop"]
+        O --> X["SIEM Dispatcher (ECS JSON)"]
+        X --> Y["Wazuh / ELK Dashboard"]
     end
 ```
 
