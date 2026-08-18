@@ -17,52 +17,9 @@ This platform implements a **fail-secure, dual-path architecture**:
 
 ## 2. End-to-End Pipeline Architecture
 
-```mermaid
-flowchart TD
-    subgraph Ingestion ["1. Traffic Ingestion Layer"]
-        A["Raw Traffic / Replayed PCAPs"] --> B["Zeek Sensor"]
-        A --> C["Suricata Sensor"]
-        B --> D["ZeekParser (conn/dns/ssl/http)"]
-        C --> E["SuricataParser (eve.json)"]
-    end
-
-    subgraph FeatureEng ["2. Feature Engineering"]
-        D --> F["FlowFeatureExtractor (31+ Tabular Features)"]
-        D --> G["Shannon & DNS Subdomain Entropy"]
-        D --> H["Port Distribution Entropy"]
-        D --> I["Inter-Arrival Timing Stats"]
-        F & G & H & I --> J["NormalizedFlow Common Schema"]
-    end
-
-    subgraph DualPath ["3. Dual-Path Detection Engine"]
-        E --> K["Suricata Signature Engine (ET Rules)"]
-        J --> L["Supervised Flow Classifier (XGBoost)"]
-        J --> M["Benign Baseline Autoencoder (PyTorch MSE)"]
-        K -->|"Signature Matches"| N["Detection Signals"]
-        L -->|"Class Probabilities"| N
-        M -->|"Reconstruction Loss"| N
-    end
-
-    subgraph Decision ["4. Fail-Secure Decision Engine"]
-        N --> O["Decision Arbiter"]
-        P["Timeout & Crash Watchdog"] -.->|"fail_secure_guard"| O
-        O --> Q{"Verdict Selection"}
-        Q -->|"Confidence >= 0.85 / Critical Sig"| R["BLOCK_AND_ISOLATE"]
-        Q -->|"Suspicious / Anomaly"| S["QUARANTINE_VLAN (VLAN 99)"]
-        Q -->|"Low Risk / Benign"| T["PASS"]
-        Q -->|"Any Component Failure / Timeout"| R
-    end
-
-    subgraph Response ["5. Containment & Visibility"]
-        R & S --> U["ContainmentManager"]
-        U -->|"Primary Action"| V["OPNsense Firewall REST API"]
-        U -->|"Failover Action"| W["Local Host iptables Drop"]
-        O --> X["SIEM Dispatcher (ECS JSON)"]
-        X --> Y["Wazuh / ELK Dashboard"]
-    end
-```
-
----
+<p align="center">
+  <img src="architecture-diagram.png" alt="NDR Platform End-to-End System Architecture" width="100%" />
+</p>
 
 ## 3. Threat Detection Matrix & ATT&CK Alignment
 

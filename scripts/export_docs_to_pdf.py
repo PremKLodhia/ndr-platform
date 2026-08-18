@@ -46,13 +46,6 @@ CSS_STYLE = """
         page-break-after: avoid;
     }
 
-    h3 {
-        font-size: 11pt;
-        color: #334155;
-        margin-top: 16px;
-        page-break-after: avoid;
-    }
-
     table {
         width: 100%;
         border-collapse: collapse;
@@ -97,21 +90,6 @@ CSS_STYLE = """
         page-break-inside: avoid;
     }
 
-    pre code {
-        background-color: transparent;
-        color: #f8fafc;
-        padding: 0;
-    }
-
-    blockquote {
-        border-left: 4px solid #3b82f6;
-        background-color: #eff6ff;
-        margin: 14px 0;
-        padding: 8px 14px;
-        border-radius: 0 4px 4px 0;
-        color: #1e40af;
-    }
-
     img {
         max-width: 100%;
         height: auto;
@@ -129,8 +107,12 @@ CSS_STYLE = """
 def convert_md_to_pdf(md_path: Path, output_pdf: Path, title: str):
     raw_md = md_path.read_text(encoding="utf-8")
     hero_path = (base / "docs" / "hero-banner.jpg").as_uri()
+    arch_path = (base / "docs" / "architecture-diagram.png").as_uri()
+    
     raw_md = raw_md.replace('src="docs/hero-banner.jpg"', f'src="{hero_path}"')
     raw_md = raw_md.replace('src="hero-banner.jpg"', f'src="{hero_path}"')
+    raw_md = raw_md.replace('src="docs/architecture-diagram.png"', f'src="{arch_path}"')
+    raw_md = raw_md.replace('src="architecture-diagram.png"', f'src="{arch_path}"')
 
     html_body = markdown.markdown(raw_md, extensions=["tables", "fenced_code", "nl2br", "sane_lists"])
     full_html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title>{CSS_STYLE}</head><body>{html_body}</body></html>"
@@ -167,10 +149,15 @@ def generate_all():
 
     # Master Whitepaper
     hero_uri = (base / 'docs' / 'hero-banner.jpg').as_uri()
+    arch_uri = (base / 'docs' / 'architecture-diagram.png').as_uri()
+    
     master_md = f"# Network Detection & Response (NDR) Platform\n## Complete Portfolio & Technical Whitepaper\n\n<p align='center'><img src='{hero_uri}' width='100%' /></p>\n\n"
     for md_file, _, _ in docs:
         if md_file.exists():
-            master_md += "\n\n<div class='page-break'></div>\n\n" + md_file.read_text(encoding="utf-8").replace('src="docs/hero-banner.jpg"', f'src="{hero_uri}"').replace('src="hero-banner.jpg"', f'src="{hero_uri}"')
+            txt = md_file.read_text(encoding="utf-8")
+            txt = txt.replace('src="docs/hero-banner.jpg"', f'src="{hero_uri}"').replace('src="hero-banner.jpg"', f'src="{hero_uri}"')
+            txt = txt.replace('src="docs/architecture-diagram.png"', f'src="{arch_uri}"').replace('src="architecture-diagram.png"', f'src="{arch_uri}"')
+            master_md += "\n\n<div class='page-break'></div>\n\n" + txt
 
     master_html = markdown.markdown(master_md, extensions=["tables", "fenced_code", "nl2br", "sane_lists"])
     full_master_html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>NDR Platform Master Whitepaper</title>{CSS_STYLE}</head><body>{master_html}</body></html>"
