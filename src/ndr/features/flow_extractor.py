@@ -1,14 +1,14 @@
 """
-Tabular flow feature extraction for machine learning and anomaly detection.
-Computes 40+ statistical, temporal, and structural flow features.
+Extended tabular flow feature extractor supporting NormalizedFlow from all data sources.
 """
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Union, Optional
+from ..ingest.common_schema import NormalizedFlow
 from ..ingest.models import UnifiedFlow, ZeekConnRecord
 from .entropy import calculate_shannon_entropy
+from .dns_features import extract_dns_features
 
-# Standard feature column order
 FLOW_FEATURE_COLUMNS = [
     "duration",
     "src_bytes",
@@ -24,7 +24,13 @@ FLOW_FEATURE_COLUMNS = [
     "avg_pkt_size",
     "avg_src_pkt_size",
     "avg_dst_pkt_size",
+    "fwd_iat_mean",
+    "bwd_iat_mean",
     "payload_entropy",
+    "dns_query_len",
+    "dns_subdomain_entropy",
+    "dns_digit_ratio",
+    "has_ssl_ja3",
     "is_tcp",
     "is_udp",
     "is_icmp",
@@ -33,23 +39,14 @@ FLOW_FEATURE_COLUMNS = [
     "is_ephemeral_dst_port",
     "is_well_known_src_port",
     "is_ephemeral_src_port",
-    "conn_state_SF",
-    "conn_state_S0",
-    "conn_state_REJ",
-    "conn_state_RSTO",
-    "conn_state_RSTR",
-    "has_signature_alert",
-    "alert_count",
-    "max_alert_severity",
 ]
 
 
 class FlowFeatureExtractor:
-    """Extracts standardized numeric feature vectors from network flows."""
+    """Extracts standardized numeric feature vectors from NormalizedFlows."""
 
-    @staticmethod
-    def extract_from_unified_flow(flow: UnifiedFlow) -> Dict[str, float]:
-        """Extract features from a UnifiedFlow instance."""
+    @classmethod
+    def extract_from_normalized_flow(cls, flow: NormalizedFlow) -> Dict[str, float]:
         duration = max(float(flow.duration), 0.000001)
         src_bytes = max(int(flow.src_bytes), 0)
         dst_bytes = max(int(flow.dst_bytes), 0)
@@ -69,12 +66,12 @@ class FlowFeatureExtractor:
         avg_src_pkt_size = src_bytes / max(src_pkts, 1)
         avg_dst_pkt_size = dst_bytes / max(dst_pkts, 1)
 
-        entropy = calculate_shannon_entropy(flow.raw_payload_bytes) if flow.raw_payload_bytes else 0.0
+        dns_feats = extract_dns_features(flow.dns_query)
 
-        proto = flow.proto.lower()
-        is_tcp = 1.0 if proto == "tcp" else 0.0
-        is_udp = 1.0 if proto == "udp" else 0.0
-        is_icmp = 1.0 if proto == "icmp" else 0.0
+        proto = str(flow.proto).lower()
+        is_tcp = 1.0 if "tcp" in proto or proto == "6" else 0.0
+        is_udp = 1.0 if "udp" in proto or proto == "17" else 0.0
+        is_icmp = 1.0 if "icmp" in proto or proto == "1" else 0.0
 
         dst_p = int(flow.dst_port)
         src_p = int(flow.src_port)
@@ -86,17 +83,7 @@ class FlowFeatureExtractor:
         is_well_known_src = 1.0 if src_p < 1024 else 0.0
         is_ephemeral_src = 1.0 if src_p >= 49152 else 0.0
 
-        state = flow.conn_state.upper()
-        conn_state_SF = 1.0 if state == "SF" else 0.0
-        conn_state_S0 = 1.0 if state == "S0" else 0.0
-        conn_state_REJ = 1.0 if state == "REJ" else 0.0
-        conn_state_RSTO = 1.0 if state == "RSTO" else 0.0
-        conn_state_RSTR = 1.0 if state == "RSTR" else 0.0
-
-        alert_count = float(len(flow.alerts))
-        has_alert = 1.0 if alert_count > 0 else 0.0
-        # In Suricata, severity 1 is high, 3 is low. If no alert, severity = 0.
-        max_sev = max([4 - a.severity for a in flow.alerts], default=0.0)
+        has_ja3 = 1.0 if flow.ssl_ja3 and flow.ssl_ja3 != "-" else 0.0
 
         return {
             "duration": float(flow.duration),
@@ -113,7 +100,13 @@ class FlowFeatureExtractor:
             "avg_pkt_size": float(avg_pkt_size),
             "avg_src_pkt_size": float(avg_src_pkt_size),
             "avg_dst_pkt_size": float(avg_dst_pkt_size),
-            "payload_entropy": float(entropy),
+            "fwd_iat_mean": float(flow.fwd_iat_mean),
+            "bwd_iat_mean": float(flow.bwd_iat_mean),
+            "payload_entropy": float(flow.dns_entropy),
+            "dns_query_len": dns_feats["dns_query_len"],
+            "dns_subdomain_entropy": dns_feats["dns_subdomain_entropy"],
+            "dns_digit_ratio": dns_feats["dns_digit_ratio"],
+            "has_ssl_ja3": has_ja3,
             "is_tcp": is_tcp,
             "is_udp": is_udp,
             "is_icmp": is_icmp,
@@ -122,43 +115,36 @@ class FlowFeatureExtractor:
             "is_ephemeral_dst_port": is_ephemeral_dst,
             "is_well_known_src_port": is_well_known_src,
             "is_ephemeral_src_port": is_ephemeral_src,
-            "conn_state_SF": conn_state_SF,
-            "conn_state_S0": conn_state_S0,
-            "conn_state_REJ": conn_state_REJ,
-            "conn_state_RSTO": conn_state_RSTO,
-            "conn_state_RSTR": conn_state_RSTR,
-            "has_signature_alert": has_alert,
-            "alert_count": alert_count,
-            "max_alert_severity": max_sev,
         }
 
     @classmethod
-    def extract_from_zeek(cls, rec: ZeekConnRecord) -> Dict[str, float]:
-        """Extract features directly from a ZeekConnRecord."""
-        flow = UnifiedFlow(
-            flow_id=rec.uid,
-            timestamp=rec.timestamp,
-            src_ip=rec.src_ip,
-            src_port=rec.src_port,
-            dst_ip=rec.dst_ip,
-            dst_port=rec.dst_port,
-            proto=rec.proto,
-            duration=rec.duration,
-            src_bytes=rec.orig_bytes or rec.orig_ip_bytes,
-            dst_bytes=rec.resp_bytes or rec.resp_ip_bytes,
-            src_pkts=rec.orig_pkts,
-            dst_pkts=rec.resp_pkts,
-            conn_state=rec.conn_state,
-            service=rec.service
+    def extract_from_unified_flow(cls, flow: UnifiedFlow) -> Dict[str, float]:
+        norm = NormalizedFlow(
+            flow_id=flow.flow_id,
+            timestamp=flow.timestamp,
+            src_ip=flow.src_ip,
+            src_port=flow.src_port,
+            dst_ip=flow.dst_ip,
+            dst_port=flow.dst_port,
+            proto=flow.proto,
+            duration=flow.duration,
+            src_bytes=flow.src_bytes,
+            dst_bytes=flow.dst_bytes,
+            src_pkts=flow.src_pkts,
+            dst_pkts=flow.dst_pkts,
+            raw_source="UnifiedFlow"
         )
-        return cls.extract_from_unified_flow(flow)
+        return cls.extract_from_normalized_flow(norm)
 
     @classmethod
-    def to_dataframe(cls, flows: List[UnifiedFlow]) -> pd.DataFrame:
-        """Convert a batch of flows to a standard pandas DataFrame."""
-        rows = [cls.extract_from_unified_flow(f) for f in flows]
+    def to_dataframe(cls, flows: Union[List[NormalizedFlow], List[UnifiedFlow]]) -> pd.DataFrame:
+        if not flows:
+            return pd.DataFrame(columns=FLOW_FEATURE_COLUMNS)
+        if isinstance(flows[0], NormalizedFlow):
+            rows = [cls.extract_from_normalized_flow(f) for f in flows]
+        else:
+            rows = [cls.extract_from_unified_flow(f) for f in flows]
         df = pd.DataFrame(rows)
-        # Ensure column ordering
         for col in FLOW_FEATURE_COLUMNS:
             if col not in df.columns:
                 df[col] = 0.0
