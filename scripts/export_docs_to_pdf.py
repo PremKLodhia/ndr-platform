@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 
 base = Path(r"C:\Users\shivs\Desktop\Projects & Development\ndr-platform")
-pdf_dir = base / "docs" / "pdf"
+pdf_dir = base / "docs"
 pdf_dir.mkdir(parents=True, exist_ok=True)
 
 edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
