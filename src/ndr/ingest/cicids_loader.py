@@ -97,8 +97,16 @@ class CICIDS2017Loader:
         if not p.exists():
             raise FileNotFoundError(f"CICIDS2017 file not found: {filepath}")
 
-        for chunk_idx, df in enumerate(pd.read_csv(p, chunksize=chunksize, low_memory=False, encoding="utf-8", on_bad_lines="skip")):
-            # Standardize column headers
-            df.columns = [c.strip() for c in df.columns]
-            flows = [cls.normalize_row(row, file_idx=chunk_idx) for row in df.to_dict(orient="records")]
-            yield flows
+        # Try utf-8 first, fallback to cp1252 / latin1
+        try:
+            reader = pd.read_csv(p, chunksize=chunksize, low_memory=False, encoding="utf-8", on_bad_lines="skip")
+            for chunk_idx, df in enumerate(reader):
+                df.columns = [str(c).strip() for c in df.columns]
+                flows = [cls.normalize_row(row, file_idx=chunk_idx) for row in df.to_dict(orient="records")]
+                yield flows
+        except UnicodeDecodeError:
+            reader = pd.read_csv(p, chunksize=chunksize, low_memory=False, encoding="latin1", on_bad_lines="skip")
+            for chunk_idx, df in enumerate(reader):
+                df.columns = [str(c).strip() for c in df.columns]
+                flows = [cls.normalize_row(row, file_idx=chunk_idx) for row in df.to_dict(orient="records")]
+                yield flows

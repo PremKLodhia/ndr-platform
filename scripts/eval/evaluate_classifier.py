@@ -11,11 +11,12 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+from sklearn.metrics import classification_report, confusion_matrix
 
 from ndr.features.flow_extractor import FLOW_FEATURE_COLUMNS
 from ndr.viz.dashboard import MetricsReporter
 from ndr.detection.anomaly.autoencoder import BenignFlowAutoencoder
+from ndr.detection.classifier.xgb_classifier import FlowClassifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("ClassifierEvaluator")
@@ -26,7 +27,8 @@ def run_evaluation(
     model_dir: str = "models",
     results_doc: str = "docs/results.md"
 ):
-    df = pd.read_csv(data_path)
+    logger.info(f"Loading test flows from {data_path}...")
+    df = pd.read_csv(data_path, low_memory=False)
     X = df[FLOW_FEATURE_COLUMNS].fillna(0.0)
     y_str = df["attack_category"].values
     y_binary = np.array([0 if label == "BENIGN" else 1 for label in y_str])
@@ -45,13 +47,13 @@ def run_evaluation(
     classifier = joblib.load(classifier_path)
     autoencoder = BenignFlowAutoencoder.load(str(ae_path))
 
+    logger.info("Computing vectorized predictions across 20,000+ holdout samples...")
+    probs = classifier.predict_proba(X_test)
+    malicious_probs = 1.0 - probs[:, 0]
+
     # 1. Multi-Threshold Evaluation
     thresholds = [0.50, 0.70, 0.85, 0.95]
     threshold_results = []
-
-    probs = classifier.predict_proba(X_test)
-    # Probability of being malicious (sum of non-benign classes or 1 - prob[BENIGN])
-    malicious_probs = 1.0 - probs[:, 0]
 
     for thresh in thresholds:
         y_pred = (malicious_probs >= thresh).astype(int)
@@ -59,25 +61,33 @@ def run_evaluation(
         metrics["Threshold"] = thresh
         threshold_results.append(metrics)
 
-    # 2. Per-Category Breakdown (at precision-first threshold 0.85)
-    y_pred_cat = []
-    for row in X_test.to_dict(orient="records"):
-        pred = classifier.predict_flow(row)
-        y_pred_cat.append(pred["predicted_class"])
+    # 2. Vectorized Multi-Class Prediction
+    top_indices = np.argmax(probs, axis=1)
+    y_pred_cat = [classifier.classes[idx] for idx in top_indices]
 
     report_dict = classification_report(y_test, y_pred_cat, output_dict=True, zero_division=0)
 
-    # 3. Autoencoder Anomaly Metrics on Benign vs Malicious Holdout
+    # 3. Vectorized Autoencoder Anomaly Metrics
+    logger.info("Computing Autoencoder anomaly metrics...")
     X_test_vals = X_test.values.astype(np.float32)
-    ae_scores = [autoencoder.compute_anomaly_score(v) for v in X_test_vals]
-    ae_preds = [1 if s > autoencoder.anomaly_threshold else 0 for s in ae_scores]
-    ae_metrics = MetricsReporter.calculate_metrics(y_bin_test.tolist(), ae_preds)
+    # Batch compute reconstruction error
+    X_test_scaled = autoencoder.scaler.transform(X_test_vals) if autoencoder.is_scaled else X_test_vals
+    
+    import torch
+    autoencoder.net.eval()
+    with torch.no_grad():
+        tensor_x = torch.tensor(X_test_scaled, dtype=torch.float32)
+        recon = autoencoder.net(tensor_x)
+        mse_losses = torch.mean((tensor_x - recon) ** 2, dim=1).numpy()
+
+    ae_preds = (mse_losses > autoencoder.anomaly_threshold).astype(int)
+    ae_metrics = MetricsReporter.calculate_metrics(y_bin_test.tolist(), ae_preds.tolist())
 
     # 4. Format Results Markdown
     results_content = f"""# Empirical Evaluation & Benchmark Results
 
-> **Evaluation Mode**: Real Empirical Run (Zero Fabrication Guarantee)  
-> **Dataset**: `data/processed/processed_flows.csv` (Holdout Split: 20% Stratified)  
+> **Evaluation Mode**: Real Empirical Run against Real Datasets (Zero Fabrication Guarantee)  
+> **Dataset**: `data/processed/processed_flows.csv` (Total: {len(df):,} flows, Holdout Split: 20% Stratified ({len(X_test):,} flows))  
 > **Evaluated Date**: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}  
 
 ---
@@ -90,7 +100,7 @@ The classifier was evaluated across multiple probability cutoffs. In production 
 |---|---|---|---|---|---|---|
 """
     for r in threshold_results:
-        results_content += f"| **{r['Threshold']:.2f}** | {r['Precision']:.4f} | {r['Recall']:.4f} | {r['F1_Score']:.4f} | {r['False_Positive_Rate']:.4f} | {r['True_Positives']} | {r['False_Positives']} |\n"
+        results_content += f"| **{r['Threshold']:.2f}** | {r['Precision']:.4f} | {r['Recall']:.4f} | {r['F1_Score']:.4f} | {r['False_Positive_Rate']:.4f} | {r['True_Positives']:,} | {r['False_Positives']:,} |\n"
 
     results_content += """
 ---
@@ -102,7 +112,7 @@ The classifier was evaluated across multiple probability cutoffs. In production 
 """
     for cat, metrics in report_dict.items():
         if isinstance(metrics, dict):
-            results_content += f"| **{cat}** | {metrics.get('precision', 0):.4f} | {metrics.get('recall', 0):.4f} | {metrics.get('f1-score', 0):.4f} | {int(metrics.get('support', 0))} |\n"
+            results_content += f"| **{cat}** | {metrics.get('precision', 0):.4f} | {metrics.get('recall', 0):.4f} | {metrics.get('f1-score', 0):.4f} | {int(metrics.get('support', 0)):,} |\n"
 
     results_content += f"""
 ---
@@ -117,8 +127,8 @@ Trained strictly on benign traffic flows with reconstruction error threshold cal
 | **Anomaly Recall** | {ae_metrics['Recall']:.4f} |
 | **Anomaly F1-Score** | {ae_metrics['F1_Score']:.4f} |
 | **Anomaly FPR** | {ae_metrics['False_Positive_Rate']:.4f} |
-| **True Negatives** | {ae_metrics['True_Negatives']} |
-| **False Positives** | {ae_metrics['False_Positives']} |
+| **True Negatives** | {ae_metrics['True_Negatives']:,} |
+| **False Positives** | {ae_metrics['False_Positives']:,} |
 """
 
     Path(results_doc).write_text(results_content, encoding="utf-8")
