@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import StandardScaler
 from ...features.flow_extractor import FLOW_FEATURE_COLUMNS
 
 logger = logging.getLogger(__name__)
@@ -53,12 +53,12 @@ except Exception as e:
 class BenignFlowAutoencoder:
     """Autoencoder for network flow anomaly detection."""
 
-    def __init__(self, input_dim: int = len(FLOW_FEATURE_COLUMNS), anomaly_threshold: float = 0.05):
+    def __init__(self, input_dim: int = len(FLOW_FEATURE_COLUMNS), anomaly_threshold: float = 0.5):
         self.input_dim = input_dim
         self.anomaly_threshold = anomaly_threshold
         self.is_trained = False
         self.torch_available = TORCH_AVAILABLE
-        self.scaler = RobustScaler()
+        self.scaler = StandardScaler()
         self.is_scaled = False
 
         if self.torch_available and PyTorchAE is not None:
@@ -66,20 +66,28 @@ class BenignFlowAutoencoder:
         else:
             self.net = None
 
-    def fit(self, X: np.ndarray, epochs: int = 20, batch_size: int = 64, lr: float = 0.001) -> "BenignFlowAutoencoder":
+    def _preprocess(self, X: np.ndarray, fit: bool = False) -> np.ndarray:
+        X_arr = np.nan_to_num(np.array(X, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+        if fit:
+            X_scaled = self.scaler.fit_transform(X_arr)
+            self.is_scaled = True
+        else:
+            X_scaled = self.scaler.transform(X_arr) if self.is_scaled else X_arr
+        return np.clip(X_scaled, -5.0, 5.0)
+
+    def fit(self, X: np.ndarray, epochs: int = 15, batch_size: int = 64, lr: float = 0.002) -> "BenignFlowAutoencoder":
         """Train autoencoder on benign flows only."""
         if not self.torch_available or self.net is None:
             self.is_trained = True
             return self
 
-        X_scaled = self.scaler.fit_transform(X)
-        self.is_scaled = True
+        X_scaled = self._preprocess(X, fit=True)
 
         tensor_x = torch.tensor(X_scaled, dtype=torch.float32)
         dataset = torch.utils.data.TensorDataset(tensor_x)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(self.net.parameters(), lr=lr, weight_decay=1e-5)
         criterion = nn.MSELoss()
 
         self.net.train()
@@ -92,12 +100,12 @@ class BenignFlowAutoencoder:
                 loss.backward()
                 optimizer.step()
 
-        # Compute adaptive threshold (99th percentile on benign training set)
+        # Calibrate adaptive threshold at 98.5th percentile of benign reconstruction loss
         self.net.eval()
         with torch.no_grad():
             reconstructed = self.net(tensor_x)
             losses = torch.mean((tensor_x - reconstructed) ** 2, dim=1).numpy()
-            self.anomaly_threshold = float(np.percentile(losses, 99))
+            self.anomaly_threshold = float(np.percentile(losses, 98.5))
 
         self.is_trained = True
         return self
@@ -108,12 +116,11 @@ class BenignFlowAutoencoder:
             return 0.01
 
         vec_reshaped = feature_vec.reshape(1, -1)
-        if self.is_scaled:
-            vec_reshaped = self.scaler.transform(vec_reshaped)
+        X_scaled = self._preprocess(vec_reshaped, fit=False)
 
         self.net.eval()
         with torch.no_grad():
-            x = torch.tensor(vec_reshaped, dtype=torch.float32)
+            x = torch.tensor(X_scaled, dtype=torch.float32)
             reconstructed = self.net(x)
             mse = float(torch.mean((x - reconstructed) ** 2).item())
         return round(mse, 6)
@@ -142,16 +149,17 @@ class BenignFlowAutoencoder:
             "net_state": self.net.state_dict() if self.net is not None else None
         }
         joblib.dump(state, filepath)
+        logger.info(f"Saved BenignFlowAutoencoder to {filepath}")
 
     @classmethod
     def load(cls, filepath: str) -> "BenignFlowAutoencoder":
-        """Load autoencoder state safely."""
+        """Deserialize autoencoder state safely."""
         state = joblib.load(filepath)
         ae = cls(input_dim=state["input_dim"], anomaly_threshold=state["anomaly_threshold"])
         ae.is_trained = state["is_trained"]
         ae.scaler = state["scaler"]
-        ae.is_scaled = state["is_scaled"]
-        if ae.net is not None and state["net_state"] is not None:
+        ae.is_scaled = state.get("is_scaled", True)
+        if ae.net is not None and state.get("net_state") is not None:
             ae.net.load_state_dict(state["net_state"])
             ae.net.eval()
         return ae
