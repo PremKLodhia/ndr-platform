@@ -24,12 +24,13 @@ An end-to-end, portfolio-grade **Network Detection and Response (NDR)** platform
 
 ## Core Design Principles
 
-1. **Fail-Secure Architecture**: If the classifier or autoencoder throws, times out (>500ms), or an API is unreachable, the verdict defaults to defensive containment (`BLOCK_AND_ISOLATE` with `fail_secure=True`)—**never a silent bypass**.
+1. **Fail-Secure Architecture**: If the classifier or autoencoder throws, misses its inference deadline (500 ms by default, set with `NDR_COMPONENT_TIMEOUT_MS`), or an API is unreachable, the verdict defaults to defensive containment (`BLOCK_AND_ISOLATE` with `fail_secure=True`, `error_type` `"Timeout"` for a missed deadline)—**never a silent bypass**.
 2. **Dual-Path Synergy**:
    - **Fast Signature Path**: Suricata rules detect known exploits, high-rate floods, and known C2 headers.
    - **Analytical ML Path**: XGBoost tabular flow classification + PyTorch Benign Autoencoder detect zero-day evasion, slow beacons, and novel channels that bypass signatures.
 3. **Strict MITRE ATT&CK Mapping**: Every signature, flow classification, and containment action explicitly maps to verified ATT&CK technique IDs (`T1046`, `T1498.001`, `T1071.001`, `T1071.004`, `T1572`, `T1110.001`).
-4. **Empirical Honesty (Zero Fabrication Guarantee)**: All metrics reflect real multi-class holdout test evaluations against 200,848 real network flows from the complete CICIDS2017 daily series.
+4. **Containment Backends**: `ContainmentManager` defaults to the `mock` backend, which records blocks in memory and does not touch any firewall. The OPNsense REST API path (with host `iptables` fallback) must be selected explicitly; it was tested in a lab environment (see [`docs/live-validation.md`](docs/live-validation.md)), not in production.
+5. **Empirical Honesty (Zero Fabrication Guarantee)**: All metrics reflect real multi-class holdout test evaluations against 200,848 real network flows from the complete CICIDS2017 daily series.
 
 ---
 
@@ -97,7 +98,7 @@ pip install -e .
 ```powershell
 pytest
 ```
-*Expected: 20 passed tests covering loaders, entropy, classification, fail-secure guards, and firewall failover.*
+*Expected: 27 passed tests covering loaders, entropy, classification, fail-secure guards (including the inference deadline), and firewall failover.*
 
 ---
 
