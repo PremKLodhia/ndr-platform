@@ -16,6 +16,11 @@ class FailSecureException(Exception):
     pass
 
 
+class ComponentTimeoutError(FailSecureException):
+    """Raised when a detection component misses its inference deadline."""
+    error_type = "Timeout"
+
+
 def fail_secure_guard(func: Callable) -> Callable:
     """
     Decorator wrapping decision functions. If any exception occurs during
@@ -55,6 +60,9 @@ def fail_secure_guard(func: Callable) -> Callable:
                 reasons=[f"FAIL-SECURE ACTIVATED: Component Failure ({type(exc).__name__}: {str(exc)})"],
                 confidence=1.0,
                 fail_secure_triggered=True,
-                details={"error_type": type(exc).__name__, "error_message": str(exc)}
+                details={
+                    "error_type": getattr(exc, "error_type", type(exc).__name__),
+                    "error_message": str(exc)
+                }
             )
     return wrapper
